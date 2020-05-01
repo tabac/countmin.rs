@@ -1,0 +1,14 @@
+[package]
+name = "countminsketch"
+version = "0.1.0"
+authors = ["Tasos Bakogiannis <t.bakogiannis@gmail.com>"]
+description = "CountMinSketch implementation."
+homepage = "https://github.com/tabac/countmin.rs"
+repository = "https://github.com/tabac/countmin.rs"
+readme = "README.md"
+license = "MIT"
+keywords = ["countmin", "count-min", "probabilistic", "sketch"]
+edition = "2018"
+
+[dependencies]
+rand = "0.7"
