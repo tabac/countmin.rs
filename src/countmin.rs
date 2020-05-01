@@ -3,7 +3,8 @@ use std::f64;
 use std::hash::{BuildHasher, Hash, Hasher};
 use std::marker::PhantomData;
 
-use rand;
+use rand::{Rng, SeedableRng};
+use rand_chacha::ChaChaRng;
 
 use crate::numeric::Zero;
 use crate::CountMinError;
@@ -43,6 +44,20 @@ where
         )
     }
 
+    pub fn new_from_seed(
+        epsilon: f64,
+        delta: f64,
+        seed: u64,
+        builder: B,
+    ) -> Result<Self, CountMinError> {
+        Self::with_dimensions_from_seed(
+            (f64::consts::E / epsilon).ceil() as usize,
+            (1.0 / delta).ln().ceil() as usize,
+            seed,
+            builder,
+        )
+    }
+
     pub fn with_dimensions(
         width: usize,
         depth: usize,
@@ -55,7 +70,26 @@ where
         Ok(CountMin {
             width:   width,
             counts:  vec![C::zero(); width * depth],
-            hashers: Self::build_hashers(depth),
+            hashers: Self::build_hashers(depth, None),
+            builder: builder,
+            phantom: PhantomData,
+        })
+    }
+
+    pub fn with_dimensions_from_seed(
+        width: usize,
+        depth: usize,
+        seed: u64,
+        builder: B,
+    ) -> Result<Self, CountMinError> {
+        if width as u64 > Self::MOD || width < 1 || depth < 1 {
+            return Err(CountMinError::InvalidDimensions);
+        }
+
+        Ok(CountMin {
+            width:   width,
+            counts:  vec![C::zero(); width * depth],
+            hashers: Self::build_hashers(depth, Some(seed)),
             builder: builder,
             phantom: PhantomData,
         })
@@ -69,11 +103,7 @@ where
         let x: u64 = hasher.finish() % Self::MOD;
 
         for (i, (a, b)) in self.hashers.iter().enumerate() {
-            // Here a, b and x fit in u32 integers but are stored as u64.
-            // This calculation should not overflow.
-            let hash = ((((a * x) % Self::MOD) + b) % Self::MOD) as usize;
-
-            let index = i * self.width + hash % self.width;
+            let index = i * self.width + self.index(*a, *b, x) % self.width;
 
             self.counts[index] += diff;
         }
@@ -93,11 +123,7 @@ where
             .iter()
             .enumerate()
             .map(|(i, (a, b))| {
-                // Here a, b and x fit in u32 integers but are stored as u64.
-                // This calculation should not overflow.
-                let hash = ((((a * x) % Self::MOD) + b) % Self::MOD) as usize;
-
-                let index = i * self.width + hash % self.width;
+                let index = i * self.width + self.index(*a, *b, x) % self.width;
 
                 self.counts[index]
             })
@@ -105,13 +131,24 @@ where
             .unwrap()
     }
 
-    fn build_hashers(count: usize) -> Vec<(u64, u64)> {
+    #[inline]
+    fn index(&self, a: u64, b: u64, x: u64) -> usize {
+        // Here a, b and x fit in u32 integers but are stored as u64.
+        // This calculation should not overflow.
+        let index = (a * x) + b;
+
+        (((index >> 31) + index) & Self::MOD) as usize
+    }
+
+    fn build_hashers(count: usize, seed: Option<u64>) -> Vec<(u64, u64)> {
+        let mut rng = match seed {
+            Some(seed) => ChaChaRng::seed_from_u64(seed),
+            None => ChaChaRng::from_entropy(),
+        };
+
         (0..count)
             .map(|_| {
-                (
-                    rand::random::<u64>() % Self::MOD,
-                    rand::random::<u64>() % Self::MOD,
-                )
+                (rng.gen::<u64>() & Self::MOD, rng.gen::<u64>() & Self::MOD)
             })
             .collect()
     }
