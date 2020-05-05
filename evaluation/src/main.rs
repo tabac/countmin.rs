@@ -82,7 +82,7 @@ where
                         *counter += 1;
 
                         println!(
-                            "processing: {}/{}",
+                            "evl: processing file: {}/{}",
                             i - pos,
                             args.len() - pos
                         );
@@ -216,9 +216,9 @@ where
 }
 
 fn usage() {
-    println!("evaluate [OPTIONS] [INPUT FILE]...");
-    println!("         [--eps EPSILON] [--width WIDTH] [--depth DEPTH]");
-    println!("         [--type TYPE] [--jobs JOBS] [--output LOCATION]");
+    println!("evl [OPTIONS] [INPUT FILE]...");
+    println!("    [--eps EPSILON] [--width WIDTH] [--depth DEPTH]");
+    println!("    [--type TYPE] [--jobs JOBS] [--output LOCATION]");
 }
 
 fn main() {

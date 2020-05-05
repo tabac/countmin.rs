@@ -1,5 +1,5 @@
 [package]
-name = "evaluation"
+name = "evl"
 version = "0.1.0"
 authors = ["Tasos Bakogiannis <t.bakogiannis@gmail.com>"]
 edition = "2018"

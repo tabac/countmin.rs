@@ -73,7 +73,7 @@ def run(args):
     # number of threads to use.
     jobs = 1
     # Rust executable location.
-    exe = './target/release/evaluation'
+    exe = './target/release/evl'
     # input hash files location.
     input_location = args[-2]
     # output location.
@@ -99,6 +99,9 @@ def run(args):
 
     for a in alpha:
         for e in epsilon:
+            message = 'exp: running evaluation with: alpha: {}, epsilon: {}.'
+            print(message.format(a, e))
+
             prefix = 'zipf-a{}-r'.format(a)
 
             command = [
