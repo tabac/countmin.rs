@@ -10,6 +10,40 @@ use serde::{Deserialize, Serialize};
 
 use crate::CountMinError;
 
+/// Implements the Count-Min Sketch data structure for summarizing data streams.
+///
+/// This implementation is based on the original paper of G. Cormode et al:
+///
+/// *An Improved Data Stream Summary: The Count-Min Sketch and its
+/// Applications.*
+///
+/// - Supports overflow checks.
+/// - Can be used with integer and floating point counters.
+/// - Supports serialization/deserialization through `serde`.
+///
+/// # Examples
+///
+/// ```
+/// use std::collections::hash_map::RandomState;
+/// use countminsketch::CountMin;
+///
+/// let mut cms = CountMin::with_dimensions(2048, 4, RandomState::new()).unwrap();
+///
+/// cms.update(&1234, 1);
+/// cms.update(&1234, 3);
+/// cms.update(&2345, 2);
+///
+/// assert_eq!(cms.query(&1234), 4);
+/// assert_eq!(cms.query(&2345), 2);
+/// ```
+///
+/// # References
+///
+/// - ["An Improved Data Stream Summary: The Count-Min Sketch and its
+///   Applications."](http://dimacs.rutgers.edu/~graham/pubs/papers/cm-full.pdf)
+///
+/// - ["Finding Frequent Items in Data Streams."](https://www.vldb.org/pvldb/vol1/1454225.pdf)
+///
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CountMin<K, C, S>
 where
@@ -30,9 +64,14 @@ where
     C: Copy + Zero + One + PartialOrd + Bounded,
     S: BuildHasher,
 {
-    // A large 32-bit prime stored in a u64.
+    // A large 32-bit prime stored in a u64. Used to create
+    // pairwise independent hash functions.
     const MOD: u64 = 2147483647;
 
+    /// Creates a new CountMin sketch instance.
+    ///
+    /// The dimensions of the sketch are calculated based on provided
+    /// error (`epsilon`) and probability of error (`delta`).
     pub fn new(
         epsilon: f64,
         delta: f64,
@@ -45,6 +84,13 @@ where
         )
     }
 
+    /// Creates a new CountMin sketch instance.
+    ///
+    /// The dimensions of the sketch are calculated based on provided
+    /// error (`epsilon`) and probability of error (`delta`).
+    ///
+    /// The random number generator used to create the pairwise independent
+    /// hash functions is seeded with `seed`.
     pub fn new_from_seed(
         epsilon: f64,
         delta: f64,
@@ -59,6 +105,7 @@ where
         )
     }
 
+    /// Creates a new CountMin sketch instance with specified dimensions.
     pub fn with_dimensions(
         width: usize,
         depth: usize,
@@ -77,6 +124,10 @@ where
         })
     }
 
+    /// Creates a new CountMin sketch instance with specified dimensions.
+    ///
+    /// The random number generator used to create the pairwise independent
+    /// hash functions is seeded with `seed`.
     pub fn with_dimensions_from_seed(
         width: usize,
         depth: usize,
@@ -96,13 +147,17 @@ where
         })
     }
 
+    /// Updates `item`'s counter by `diff`.
     pub fn update(&mut self, item: &K, diff: C) {
+        // Create a new hasher.
         let mut hasher = self.builder.build_hasher();
-
+        // Calculate the hash.
         item.hash(&mut hasher);
-
+        // Ensure `x` is less than `MOD`.
         let x: u64 = hasher.finish() % Self::MOD;
 
+        // For each row of the sketch increment the corresponding
+        // counter by `diff`.
         for (i, (a, b)) in self.hashers.iter().enumerate() {
             let index = i * self.width + self.index(*a, *b, x) % self.width;
 
@@ -110,13 +165,16 @@ where
         }
     }
 
+    /// Queries for the `item`'s count.
     pub fn query(&self, item: &K) -> C {
+        // Create a new hasher.
         let mut hasher = self.builder.build_hasher();
-
+        // Calculate the hash.
         item.hash(&mut hasher);
-
+        // Ensure `x` is less than `MOD`.
         let x: u64 = hasher.finish() % Self::MOD;
 
+        // Return the minimum of the counter values that correspond to `item`.
         self.hashers
             .iter()
             .enumerate()
@@ -129,27 +187,24 @@ where
             .unwrap()
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.counts.iter().all(|c| c.is_zero())
-    }
-
-    pub fn merge(
-        &mut self,
-        other: &CountMin<K, C, S>,
-    ) -> Result<(), CountMinError> {
+    /// Merges the `other` CountMin sketch into `self`.
+    ///
+    /// The two sketches must be compatible, that is
+    /// [check_compatible_with](CountMin::check_compatible_with) must not
+    /// return an error, compatibility is not checked here!
+    pub fn merge(&mut self, other: &CountMin<K, C, S>) {
         self.counts
             .iter_mut()
             .zip(other.counts.iter())
             .for_each(|(x, y)| *x = *x + *y);
-
-        Ok(())
     }
 
-    pub fn clear(&mut self) {
-        self.counts.iter_mut().for_each(|x| *x = C::zero());
-    }
-
-    pub fn inner(&self, other: &CountMin<K, C, S>) -> Result<C, CountMinError> {
+    /// Computes the inner product of `self` with the `other` CountMin sketch.
+    ///
+    /// The two sketches must be compatible, that is
+    /// [check_compatible_with](CountMin::check_compatible_with) must not
+    /// return an error, compatibility is not checked here!
+    pub fn inner(&self, other: &CountMin<K, C, S>) -> C {
         let (mut inner, mut cur) = (C::max_value(), C::zero());
 
         let counts = self.counts.iter().zip(other.counts.iter()).enumerate();
@@ -165,10 +220,20 @@ where
             }
         }
 
-        Ok(inner)
+        inner
     }
 
-    #[inline]
+    /// Returns `true` if all the counters are set to zero.
+    pub fn is_empty(&self) -> bool {
+        self.counts.iter().all(|c| c.is_zero())
+    }
+
+    /// Clears the sketch, sets all the counters to zero.
+    pub fn clear(&mut self) {
+        self.counts.iter_mut().for_each(|x| *x = C::zero());
+    }
+
+    #[inline] // Computes the function: `f(x) = a * x + b`.
     fn index(&self, a: u64, b: u64, x: u64) -> usize {
         // Here a, b and x fit in u32 integers but are stored as u64.
         // This calculation should not overflow.
@@ -177,6 +242,12 @@ where
         (((index >> 31) + index) & Self::MOD) as usize
     }
 
+    // Builds the pairwise independent hash functions.
+    //
+    // All functions are in the form of `f(x) = a * x + b` where x is
+    // the hash of the input item.
+    //
+    // If a `seed` is provided, it is used to seed the random number generator.
     fn build_hashers(count: usize, seed: Option<u64>) -> Vec<(u64, u64)> {
         let mut rng = match seed {
             Some(seed) => ChaChaRng::seed_from_u64(seed),
@@ -197,6 +268,9 @@ where
     C: Copy + Zero + One + PartialOrd + CheckedAdd + CheckedMul + Bounded,
     S: BuildHasher,
 {
+    /// Updates `item`'s counter by `diff`.
+    ///
+    /// Returns an error in case of trying to add with overflow.
     pub fn update_checked(
         &mut self,
         item: &K,
@@ -219,6 +293,13 @@ where
         Ok(())
     }
 
+    /// Merges the `other` CountMin sketch into `self`.
+    ///
+    /// The two sketches must be compatible, that is
+    /// [check_compatible_with](CountMin::check_compatible_with) must not
+    /// return an error, compatibility is not checked here!
+    ///
+    /// Returns an error in case of trying to add with overflow.
     pub fn merge_checked(
         &mut self,
         other: &CountMin<K, C, S>,
@@ -232,6 +313,13 @@ where
         Ok(())
     }
 
+    /// Computes the inner product of `self` with the `other` CountMin sketch.
+    ///
+    /// The two sketches must be compatible, that is
+    /// [check_compatible_with](CountMin::check_compatible_with) must not
+    /// return an error, compatibility is not checked here!
+    ///
+    /// Returns an error in case of trying to add or multiply with overflow.
     pub fn inner_checked(
         &self,
         other: &CountMin<K, C, S>,
@@ -265,6 +353,10 @@ where
     C: Copy + Zero + One + PartialOrd + Bounded,
     S: BuildHasher + Eq,
 {
+    /// Checks if the `other` CountMin sketch is compatible with `self`.
+    ///
+    /// For two sketches to be compatible they have to have equal dimensions,
+    /// equal pairwise independent hash functions and equal hasher builders.
     pub fn check_compatible_with(
         &self,
         other: &CountMin<K, C, S>,
@@ -539,20 +631,6 @@ mod tests {
 
             let mut cms: CountMin<u64, PassThroughHasherBuilder, f32> =
                 CountMin::with_dimensions(10, 3, builder).unwrap();
-
-            cms.hashers = vec![(1, 0), (2, 0), (3, 0)];
-
-            assert!(cms.update_checked(&1, 1.2).is_ok());
-
-            assert!(cms.update_checked(&12, 2.3).is_ok());
-
-            let expected = vec![
-                0.0, 1.2, 2.3, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, // depth: 0.
-                0.0, 0.0, 1.2, 0.0, 2.3, 0.0, 0.0, 0.0, 0.0, 0.0, // depth: 1.
-                0.0, 0.0, 0.0, 1.2, 0.0, 0.0, 2.3, 0.0, 0.0, 0.0, // depth: 2.
-            ];
-
-            assert_eq!(cms.counts, expected);
         */
     }
 
@@ -600,7 +678,7 @@ mod tests {
 
         assert_eq!(other.counts, expected);
 
-        assert!(cms.merge(&other).is_ok());
+        cms.merge(&other);
 
         let expected = vec![
             0, 2, 12, 3, 0, 0, 0, 0, 0, 0, // depth: 0.
@@ -653,7 +731,7 @@ mod tests {
 
         assert_eq!(other.counts, expected);
 
-        assert!(cms.merge(&other).is_ok());
+        cms.merge(&other);
 
         let expected = vec![
             0, 255, 5, 3, 0, 0, 0, 0, 0, 0, // depth: 0.
@@ -743,11 +821,11 @@ mod tests {
 
         assert_eq!(other.counts, expected);
 
-        assert_eq!(cms.inner(&other), Ok(36));
+        assert_eq!(cms.inner(&other), 36);
 
         other.counts[2] = 4;
 
-        assert_eq!(cms.inner(&other), Ok(21));
+        assert_eq!(cms.inner(&other), 21);
     }
 
     #[test]

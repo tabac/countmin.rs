@@ -1,3 +1,15 @@
+//! Implementations of the Count-Min sketch data structure for summarizing
+//! data streams
+//!
+//! Count-Min is a *sublinear space* data structure for approximating item
+//! frequencies. Originally, it was proposed by  G. Cormode et al. in
+//! *An Improved Data Stream Summary: The Count-Min Sketch and its
+//! Applications.*.
+//!
+//! Current implementations:
+//!
+//! * [`CountMin`]
+
 use std::fmt;
 
 mod countmin;
