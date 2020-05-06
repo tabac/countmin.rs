@@ -3,18 +3,19 @@ use std::f64;
 use std::hash::{BuildHasher, Hash, Hasher};
 use std::marker::PhantomData;
 
+use num_traits::{Bounded, CheckedAdd, CheckedMul, One, Zero};
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaChaRng;
+use serde::{Deserialize, Serialize};
 
-use crate::numeric::Zero;
 use crate::CountMinError;
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CountMin<H, B, C>
 where
     H: Hash + ?Sized,
     B: BuildHasher,
-    C: Copy + Zero + PartialOrd,
+    C: Copy + Zero + One + PartialOrd + Bounded,
 {
     width:   usize,
     counts:  Vec<C>,
@@ -23,11 +24,34 @@ where
     phantom: PhantomData<H>,
 }
 
+pub trait CountMinChecked<H, B, C>
+where
+    H: Hash + ?Sized,
+    B: BuildHasher,
+    C: Copy + Zero + One + PartialOrd + CheckedAdd + CheckedMul + Bounded,
+{
+    fn update_checked(
+        &mut self,
+        item: &H,
+        diff: C,
+    ) -> Result<(), CountMinError>;
+
+    fn merge_checked(
+        &mut self,
+        other: &CountMin<H, B, C>,
+    ) -> Result<(), CountMinError>;
+
+    fn inner_checked(
+        &self,
+        other: &CountMin<H, B, C>,
+    ) -> Result<C, CountMinError>;
+}
+
 impl<H, B, C> CountMin<H, B, C>
 where
     H: Hash + ?Sized,
     B: BuildHasher,
-    C: Copy + Zero + PartialOrd,
+    C: Copy + Zero + One + PartialOrd + Bounded,
 {
     // A large 32-bit prime stored in a u64.
     const MOD: u64 = 2147483647;
@@ -105,7 +129,7 @@ where
         for (i, (a, b)) in self.hashers.iter().enumerate() {
             let index = i * self.width + self.index(*a, *b, x) % self.width;
 
-            self.counts[index] += diff;
+            self.counts[index] = self.counts[index] + diff;
         }
     }
 
@@ -115,9 +139,6 @@ where
         item.hash(&mut hasher);
 
         let x: u64 = hasher.finish() % Self::MOD;
-
-        // Here we unwrap since we know that `self.hashers` is not empty.
-        // The dimensions were checked in the constructor.
 
         self.hashers
             .iter()
@@ -129,6 +150,65 @@ where
             })
             .min_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal))
             .unwrap()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.counts.iter().all(|c| c.is_zero())
+    }
+
+    pub fn merge(
+        &mut self,
+        other: &CountMin<H, B, C>,
+    ) -> Result<(), CountMinError> {
+        // XXX: What about the case when a `self.builder` has state ...
+
+        if self.width != other.width || self.counts.len() != other.counts.len()
+        {
+            return Err(CountMinError::IncompatibleDimensions);
+        }
+        if self.hashers != other.hashers {
+            return Err(CountMinError::IncompatibleHashers);
+        }
+
+        self.counts
+            .iter_mut()
+            .zip(other.counts.iter())
+            .for_each(|(x, y)| *x = *x + *y);
+
+        Ok(())
+    }
+
+    pub fn clear(&mut self) {
+        self.counts.iter_mut().for_each(|x| *x = C::zero());
+    }
+
+    pub fn inner(&self, other: &CountMin<H, B, C>) -> Result<C, CountMinError> {
+        // XXX: What about the case when a `self.builder` has state ...
+
+        if self.width != other.width || self.counts.len() != other.counts.len()
+        {
+            return Err(CountMinError::IncompatibleDimensions);
+        }
+        if self.hashers != other.hashers {
+            return Err(CountMinError::IncompatibleHashers);
+        }
+
+        let (mut inner, mut cur) = (C::max_value(), C::zero());
+
+        let counts = self.counts.iter().zip(other.counts.iter()).enumerate();
+
+        for (i, (&a, &b)) in counts {
+            cur = cur + a * b;
+
+            if (i + 1) % self.width == 0 {
+                if cur < inner {
+                    inner = cur;
+                }
+                cur = C::zero();
+            }
+        }
+
+        Ok(inner)
     }
 
     #[inline]
@@ -151,6 +231,89 @@ where
                 (rng.gen::<u64>() & Self::MOD, rng.gen::<u64>() & Self::MOD)
             })
             .collect()
+    }
+}
+
+impl<H, B, C> CountMinChecked<H, B, C> for CountMin<H, B, C>
+where
+    H: Hash + ?Sized,
+    B: BuildHasher,
+    C: Copy + Zero + One + PartialOrd + CheckedAdd + CheckedMul + Bounded,
+{
+    fn update_checked(
+        &mut self,
+        item: &H,
+        diff: C,
+    ) -> Result<(), CountMinError> {
+        let mut hasher = self.builder.build_hasher();
+
+        item.hash(&mut hasher);
+
+        let x: u64 = hasher.finish() % Self::MOD;
+
+        for (i, (a, b)) in self.hashers.iter().enumerate() {
+            let index = i * self.width + self.index(*a, *b, x) % self.width;
+
+            self.counts[index] = self.counts[index]
+                .checked_add(&diff)
+                .ok_or(CountMinError::CounterOverflow)?;
+        }
+
+        Ok(())
+    }
+
+    fn merge_checked(
+        &mut self,
+        other: &CountMin<H, B, C>,
+    ) -> Result<(), CountMinError> {
+        if self.width != other.width || self.counts.len() != other.counts.len()
+        {
+            return Err(CountMinError::IncompatibleDimensions);
+        }
+
+        let counts = self.counts.iter_mut().zip(other.counts.iter());
+
+        for (x, y) in counts {
+            *x = x.checked_add(y).ok_or(CountMinError::CounterOverflow)?;
+        }
+
+        Ok(())
+    }
+
+    fn inner_checked(
+        &self,
+        other: &CountMin<H, B, C>,
+    ) -> Result<C, CountMinError> {
+        // XXX: What about the case when a `self.builder` has state ...
+
+        if self.width != other.width || self.counts.len() != other.counts.len()
+        {
+            return Err(CountMinError::IncompatibleDimensions);
+        }
+        if self.hashers != other.hashers {
+            return Err(CountMinError::IncompatibleHashers);
+        }
+
+        let (mut inner, mut cur) = (C::max_value(), C::zero());
+
+        let counts = self.counts.iter().zip(other.counts.iter()).enumerate();
+
+        for (i, (a, b)) in counts {
+            cur = cur
+                .checked_add(
+                    &a.checked_mul(b).ok_or(CountMinError::CounterOverflow)?,
+                )
+                .ok_or(CountMinError::CounterOverflow)?;
+
+            if (i + 1) % self.width == 0 {
+                if cur < inner {
+                    inner = cur;
+                }
+                cur = C::zero();
+            }
+        }
+
+        Ok(inner)
     }
 }
 
@@ -335,5 +498,366 @@ mod tests {
         assert_eq!(cms.query(&1), 1.2);
 
         assert_eq!(cms.query(&12), 0.07);
+    }
+
+    #[test]
+    fn test_is_empty() {
+        let builder = PassThroughHasherBuilder {};
+
+        let mut cms: CountMin<u64, PassThroughHasherBuilder, u32> =
+            CountMin::with_dimensions(10, 3, builder).unwrap();
+
+        assert!(cms.is_empty());
+
+        cms.update(&1, 1);
+
+        assert!(!cms.is_empty());
+    }
+
+    #[test]
+    fn test_update_checked() {
+        let builder = PassThroughHasherBuilder {};
+
+        let mut cms: CountMin<u64, PassThroughHasherBuilder, u8> =
+            CountMin::with_dimensions(10, 3, builder).unwrap();
+
+        cms.hashers = vec![(1, 0), (2, 0), (3, 0)];
+
+        assert!(cms.update_checked(&1, 1).is_ok());
+
+        assert!(cms.update_checked(&12, 2).is_ok());
+
+        let expected = vec![
+            0, 1, 2, 0, 0, 0, 0, 0, 0, 0, // depth: 0.
+            0, 0, 1, 0, 2, 0, 0, 0, 0, 0, // depth: 1.
+            0, 0, 0, 1, 0, 0, 2, 0, 0, 0, // depth: 2.
+        ];
+
+        assert_eq!(cms.counts, expected);
+
+        assert!(cms.update_checked(&3, 3).is_ok());
+
+        assert!(cms.update_checked(&22, 3).is_ok());
+
+        let expected = vec![
+            0, 1, 5, 3, 0, 0, 0, 0, 0, 0, // depth: 0.
+            0, 0, 1, 0, 5, 0, 3, 0, 0, 0, // depth: 1.
+            0, 0, 0, 1, 0, 0, 5, 0, 0, 3, // depth: 2.
+        ];
+
+        assert_eq!(cms.counts, expected);
+
+        assert!(cms.update_checked(&2, 250).is_ok());
+
+        assert_eq!(
+            cms.update_checked(&2, 1),
+            Err(CountMinError::CounterOverflow)
+        );
+
+        /*
+            // Does not build for f32.
+            //
+            let builder = PassThroughHasherBuilder {};
+
+            let mut cms: CountMin<u64, PassThroughHasherBuilder, f32> =
+                CountMin::with_dimensions(10, 3, builder).unwrap();
+
+            cms.hashers = vec![(1, 0), (2, 0), (3, 0)];
+
+            assert!(cms.update_checked(&1, 1.2).is_ok());
+
+            assert!(cms.update_checked(&12, 2.3).is_ok());
+
+            let expected = vec![
+                0.0, 1.2, 2.3, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, // depth: 0.
+                0.0, 0.0, 1.2, 0.0, 2.3, 0.0, 0.0, 0.0, 0.0, 0.0, // depth: 1.
+                0.0, 0.0, 0.0, 1.2, 0.0, 0.0, 2.3, 0.0, 0.0, 0.0, // depth: 2.
+            ];
+
+            assert_eq!(cms.counts, expected);
+        */
+    }
+
+    #[test]
+    fn test_merge() {
+        let builder = PassThroughHasherBuilder {};
+
+        let mut cms: CountMin<u64, PassThroughHasherBuilder, u32> =
+            CountMin::with_dimensions(10, 3, builder).unwrap();
+
+        cms.hashers = vec![(1, 0), (2, 0), (3, 0)];
+
+        cms.update(&1, 1);
+
+        cms.update(&12, 2);
+
+        cms.update(&3, 3);
+
+        cms.update(&22, 3);
+
+        let expected = vec![
+            0, 1, 5, 3, 0, 0, 0, 0, 0, 0, // depth: 0.
+            0, 0, 1, 0, 5, 0, 3, 0, 0, 0, // depth: 1.
+            0, 0, 0, 1, 0, 0, 5, 0, 0, 3, // depth: 2.
+        ];
+
+        assert_eq!(cms.counts, expected);
+
+        let builder = PassThroughHasherBuilder {};
+
+        let mut other: CountMin<u64, PassThroughHasherBuilder, u32> =
+            CountMin::with_dimensions(10, 3, builder).unwrap();
+
+        other.hashers = vec![(1, 0), (2, 0), (3, 0)];
+
+        other.update(&1, 1);
+
+        other.update(&12, 7);
+
+        let expected = vec![
+            0, 1, 7, 0, 0, 0, 0, 0, 0, 0, // depth: 0.
+            0, 0, 1, 0, 7, 0, 0, 0, 0, 0, // depth: 1.
+            0, 0, 0, 1, 0, 0, 7, 0, 0, 0, // depth: 2.
+        ];
+
+        assert_eq!(other.counts, expected);
+
+        assert!(cms.merge(&other).is_ok());
+
+        let expected = vec![
+            0, 2, 12, 3, 0, 0, 0, 0, 0, 0, // depth: 0.
+            0, 0, 2, 0, 12, 0, 3, 0, 0, 0, // depth: 1.
+            0, 0, 0, 2, 0, 0, 12, 0, 0, 3, // depth: 2.
+        ];
+
+        assert_eq!(cms.counts, expected);
+
+        other.hashers = vec![(1, 1), (2, 1), (3, 1)];
+
+        assert_eq!(cms.merge(&other), Err(CountMinError::IncompatibleHashers));
+
+        let builder = PassThroughHasherBuilder {};
+
+        let other: CountMin<u64, PassThroughHasherBuilder, u32> =
+            CountMin::with_dimensions(10, 4, builder).unwrap();
+
+        assert_eq!(
+            cms.merge(&other),
+            Err(CountMinError::IncompatibleDimensions)
+        );
+    }
+
+    #[test]
+    fn test_merge_checked() {
+        let builder = PassThroughHasherBuilder {};
+
+        let mut cms: CountMin<u64, PassThroughHasherBuilder, u8> =
+            CountMin::with_dimensions(10, 3, builder).unwrap();
+
+        cms.hashers = vec![(1, 0), (2, 0), (3, 0)];
+
+        assert!(cms.update_checked(&1, 254).is_ok());
+
+        assert!(cms.update_checked(&12, 2).is_ok());
+
+        assert!(cms.update_checked(&3, 3).is_ok());
+
+        assert!(cms.update_checked(&22, 3).is_ok());
+
+        let expected = vec![
+            0, 254, 5, 3, 0, 0, 0, 0, 0, 0, // depth: 0.
+            0, 0, 254, 0, 5, 0, 3, 0, 0, 0, // depth: 1.
+            0, 0, 0, 254, 0, 0, 5, 0, 0, 3, // depth: 2.
+        ];
+
+        assert_eq!(cms.counts, expected);
+
+        let builder = PassThroughHasherBuilder {};
+
+        let mut other: CountMin<u64, PassThroughHasherBuilder, u8> =
+            CountMin::with_dimensions(10, 3, builder).unwrap();
+
+        other.hashers = vec![(1, 0), (2, 0), (3, 0)];
+
+        assert!(other.update_checked(&1, 1).is_ok());
+
+        let expected = vec![
+            0, 1, 0, 0, 0, 0, 0, 0, 0, 0, // depth: 0.
+            0, 0, 1, 0, 0, 0, 0, 0, 0, 0, // depth: 1.
+            0, 0, 0, 1, 0, 0, 0, 0, 0, 0, // depth: 2.
+        ];
+
+        assert_eq!(other.counts, expected);
+
+        assert!(cms.merge(&other).is_ok());
+
+        let expected = vec![
+            0, 255, 5, 3, 0, 0, 0, 0, 0, 0, // depth: 0.
+            0, 0, 255, 0, 5, 0, 3, 0, 0, 0, // depth: 1.
+            0, 0, 0, 255, 0, 0, 5, 0, 0, 3, // depth: 2.
+        ];
+
+        assert_eq!(cms.counts, expected);
+
+        assert_eq!(
+            cms.merge_checked(&other),
+            Err(CountMinError::CounterOverflow)
+        );
+    }
+
+    #[test]
+    fn test_clear() {
+        let builder = PassThroughHasherBuilder {};
+
+        let mut cms: CountMin<u64, PassThroughHasherBuilder, u32> =
+            CountMin::with_dimensions(10, 3, builder).unwrap();
+
+        cms.hashers = vec![(1, 0), (2, 0), (3, 0)];
+
+        cms.update(&1, 1);
+
+        cms.update(&12, 2);
+
+        cms.update(&3, 3);
+
+        cms.update(&22, 3);
+
+        let expected = vec![
+            0, 1, 5, 3, 0, 0, 0, 0, 0, 0, // depth: 0.
+            0, 0, 1, 0, 5, 0, 3, 0, 0, 0, // depth: 1.
+            0, 0, 0, 1, 0, 0, 5, 0, 0, 3, // depth: 2.
+        ];
+
+        assert_eq!(cms.counts, expected);
+
+        cms.clear();
+
+        assert!(cms.is_empty());
+    }
+
+    #[test]
+    fn test_inner() {
+        let builder = PassThroughHasherBuilder {};
+
+        let mut cms: CountMin<u64, PassThroughHasherBuilder, u32> =
+            CountMin::with_dimensions(10, 3, builder).unwrap();
+
+        cms.hashers = vec![(1, 0), (2, 0), (3, 0)];
+
+        cms.update(&1, 1);
+
+        cms.update(&12, 2);
+
+        cms.update(&3, 3);
+
+        cms.update(&22, 3);
+
+        let expected = vec![
+            0, 1, 5, 3, 0, 0, 0, 0, 0, 0, // depth: 0.
+            0, 0, 1, 0, 5, 0, 3, 0, 0, 0, // depth: 1.
+            0, 0, 0, 1, 0, 0, 5, 0, 0, 3, // depth: 2.
+        ];
+
+        assert_eq!(cms.counts, expected);
+
+        let builder = PassThroughHasherBuilder {};
+
+        let mut other: CountMin<u64, PassThroughHasherBuilder, u32> =
+            CountMin::with_dimensions(10, 3, builder).unwrap();
+
+        other.hashers = vec![(1, 0), (2, 0), (3, 0)];
+
+        other.update(&1, 1);
+
+        other.update(&12, 7);
+
+        let expected = vec![
+            0, 1, 7, 0, 0, 0, 0, 0, 0, 0, // depth: 0.
+            0, 0, 1, 0, 7, 0, 0, 0, 0, 0, // depth: 1.
+            0, 0, 0, 1, 0, 0, 7, 0, 0, 0, // depth: 2.
+        ];
+
+        assert_eq!(other.counts, expected);
+
+        assert_eq!(cms.inner(&other), Ok(36));
+
+        other.counts[2] = 4;
+
+        assert_eq!(cms.inner(&other), Ok(21));
+
+        other.hashers = vec![(1, 1), (2, 1), (3, 1)];
+
+        assert_eq!(cms.inner(&other), Err(CountMinError::IncompatibleHashers));
+
+        let builder = PassThroughHasherBuilder {};
+
+        let other: CountMin<u64, PassThroughHasherBuilder, u32> =
+            CountMin::with_dimensions(10, 4, builder).unwrap();
+
+        assert_eq!(
+            cms.inner(&other),
+            Err(CountMinError::IncompatibleDimensions)
+        );
+    }
+
+    #[test]
+    fn test_inner_checked() {
+        let builder = PassThroughHasherBuilder {};
+
+        let mut cms: CountMin<u64, PassThroughHasherBuilder, u8> =
+            CountMin::with_dimensions(10, 3, builder).unwrap();
+
+        cms.hashers = vec![(1, 0), (2, 0), (3, 0)];
+
+        cms.update(&1, 1);
+
+        cms.update(&12, 2);
+
+        cms.update(&3, 3);
+
+        cms.update(&22, 3);
+
+        let expected = vec![
+            0, 1, 5, 3, 0, 0, 0, 0, 0, 0, // depth: 0.
+            0, 0, 1, 0, 5, 0, 3, 0, 0, 0, // depth: 1.
+            0, 0, 0, 1, 0, 0, 5, 0, 0, 3, // depth: 2.
+        ];
+
+        assert_eq!(cms.counts, expected);
+
+        let builder = PassThroughHasherBuilder {};
+
+        let mut other: CountMin<u64, PassThroughHasherBuilder, u8> =
+            CountMin::with_dimensions(10, 3, builder).unwrap();
+
+        other.hashers = vec![(1, 0), (2, 0), (3, 0)];
+
+        other.update(&1, 1);
+
+        other.update(&12, 7);
+
+        let expected = vec![
+            0, 1, 7, 0, 0, 0, 0, 0, 0, 0, // depth: 0.
+            0, 0, 1, 0, 7, 0, 0, 0, 0, 0, // depth: 1.
+            0, 0, 0, 1, 0, 0, 7, 0, 0, 0, // depth: 2.
+        ];
+
+        assert_eq!(other.counts, expected);
+
+        other.counts[2] = 50;
+
+        assert_eq!(cms.inner_checked(&other), Ok(36));
+
+        other.counts[14] = 50;
+        other.counts[26] = 50;
+
+        assert_eq!(cms.inner_checked(&other), Ok(251));
+
+        other.counts[2] = 51;
+
+        assert_eq!(
+            cms.inner_checked(&other),
+            Err(CountMinError::CounterOverflow)
+        );
     }
 }

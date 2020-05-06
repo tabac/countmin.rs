@@ -1,7 +1,6 @@
 use std::fmt;
 
 mod countmin;
-mod numeric;
 
 pub use countmin::CountMin;
 
@@ -9,6 +8,8 @@ pub use countmin::CountMin;
 pub enum CountMinError {
     CounterOverflow,
     InvalidDimensions,
+    IncompatibleHashers,
+    IncompatibleDimensions,
 }
 
 impl fmt::Display for CountMinError {
@@ -16,6 +17,10 @@ impl fmt::Display for CountMinError {
         match self {
             CountMinError::CounterOverflow => "counter overflowed.".fmt(f),
             CountMinError::InvalidDimensions => "invalid dimensions.".fmt(f),
+            CountMinError::IncompatibleHashers => "incomatible hashers.".fmt(f),
+            CountMinError::IncompatibleDimensions => {
+                "incompatible dimensions.".fmt(f)
+            },
         }
     }
 }
