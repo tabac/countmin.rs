@@ -9,6 +9,7 @@ readme = "README.md"
 license = "MIT"
 keywords = ["countmin", "count-min", "probabilistic", "sketch"]
 edition = "2018"
+exclude = ["evaluation/*"]
 
 [profile.release]
 debug = true

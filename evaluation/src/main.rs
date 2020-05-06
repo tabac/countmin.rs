@@ -13,12 +13,14 @@ use std::thread;
 
 use countminsketch::CountMin;
 
+// Supported item types.
 enum FileType {
     Int,
     UInt,
     Text,
 }
 
+// Configuration used for the run
 struct Configuration {
     eps:    f64,
     jobs:   usize,
@@ -28,6 +30,7 @@ struct Configuration {
     output: String,
 }
 
+// Reads an input file returning a Vec with its parsed contents.
 fn load<K>(filepath: &String) -> Vec<K>
 where
     K: str::FromStr + fmt::Debug,
@@ -50,6 +53,13 @@ where
     nums
 }
 
+// Runs an evaluation experiment.
+//
+// Creates `conf.jobs` threads. Each thread picks an input file, processes it
+// and pushes the results into a vector.
+//
+// When all threads are finished processing the result vectors are merged and
+// saved into a output file.
 fn run<K>(conf: Configuration, args: Vec<String>, pos: usize)
 where
     K: str::FromStr + fmt::Debug + Hash + Eq + Ord,
@@ -67,6 +77,7 @@ where
             thread::spawn(move || -> Vec<(f64, f64, f64)> {
                 let mut results = Vec::new();
 
+                // Pick input files until no more are left.
                 loop {
                     let i;
 
@@ -88,8 +99,10 @@ where
                         );
                     }
 
+                    // Load data.
                     let hashes: Vec<K> = load(&args[i]);
 
+                    // Create a Count-Min sketch.
                     let mut cms = CountMin::with_dimensions(
                         conf.width,
                         conf.depth,
@@ -97,11 +110,15 @@ where
                     )
                     .unwrap();
 
+                    // Used to keep the actual item frequencies.
                     let mut counts: HashMap<&K, u32> = HashMap::new();
 
+                    // Used to store the min/max/avg relative errors.
                     let (mut minres, mut maxres, mut avgres) =
                         (vec![], vec![], vec![]);
 
+                    // We insert items into the sketch and calculate
+                    // relative errors for 1000 times.
                     let samples = cmp::max(1, hashes.len() / 1000);
 
                     for (j, num) in hashes.iter().enumerate() {
@@ -112,6 +129,7 @@ where
                         *entry += 1;
 
                         if j > 0 && j % samples == 0 {
+                            // Calculate and store relative errors.
                             let thres = (conf.eps * j as f64).ceil() as u32;
 
                             let (_, minre, maxre, avgre) =
@@ -125,6 +143,7 @@ where
                         }
                     }
 
+                    // Calculate and store relative errors.
                     let thres = (conf.eps * hashes.len() as f64).ceil() as u32;
 
                     let (_, minre, maxre, avgre) =
@@ -134,6 +153,7 @@ where
                     maxres.push(maxre);
                     avgres.push(avgre);
 
+                    // Take the mean of the relative errors.
                     results.push((
                         minres.iter().sum::<f64>() / minres.len() as f64,
                         maxres.iter().sum::<f64>() / maxres.len() as f64,
@@ -146,6 +166,7 @@ where
         })
         .collect();
 
+    // Merge all the results into one output vector.
     let mut results: Vec<(f64, f64, f64)> = Vec::new();
 
     for thread in threads {
@@ -155,6 +176,7 @@ where
         }
     }
 
+    // Save results to file.
     let location = Path::new(&conf.output).to_path_buf();
 
     let basename = Path::new(&args[pos]).file_name().unwrap().to_str().unwrap();
@@ -175,6 +197,10 @@ where
     writer.flush().unwrap();
 }
 
+// Calculates min/max/avg relative errors of item frequencies.
+//
+// The relative errors are calculated only for the heavy hitters, that is
+// the items that have frequency larger that `thres = epsilon * items.len()`.
 fn heavy_hitters_relative_errors<K>(
     cms: &CountMin<K, u32, RandomState>,
     counts: &HashMap<&K, u32>,
@@ -223,6 +249,7 @@ fn usage() {
 fn main() {
     let args: Vec<String> = std::env::args().collect();
 
+    // Default configuration.
     let mut conf = Configuration {
         eps:    0.001,
         jobs:   1,
@@ -241,6 +268,7 @@ fn main() {
                     .parse::<f64>()
                     .expect("Failed to parse epsilon.");
 
+                // Re-calculate width for given `epsilon`.
                 conf.width = (2.0f64 / conf.eps).ceil() as usize;
 
                 i += 2;

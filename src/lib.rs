@@ -1,8 +1,8 @@
 //! Implementations of the Count-Min sketch data structure for summarizing
-//! data streams
+//! data streams.
 //!
 //! Count-Min is a *sublinear space* data structure for approximating item
-//! frequencies. Originally, it was proposed by  G. Cormode et al. in
+//! frequencies. Originally, it was proposed by G. Cormode et al. in
 //! *An Improved Data Stream Summary: The Count-Min Sketch and its
 //! Applications.*.
 //!
@@ -28,11 +28,13 @@ pub enum CountMinError {
 impl fmt::Display for CountMinError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            CountMinError::CounterOverflow => "counter overflowed.".fmt(f),
+            CountMinError::CounterOverflow => "counter overflow.".fmt(f),
             CountMinError::InvalidDimensions => "invalid dimensions.".fmt(f),
-            CountMinError::IncompatibleHashers => "incomatible hashers.".fmt(f),
+            CountMinError::IncompatibleHashers => {
+                "incompatible hashers.".fmt(f)
+            },
             CountMinError::IncompatibleBuilders => {
-                "incomatible builders.".fmt(f)
+                "incompatible builders.".fmt(f)
             },
             CountMinError::IncompatibleDimensions => {
                 "incompatible dimensions.".fmt(f)
