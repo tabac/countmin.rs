@@ -11,47 +11,24 @@ use serde::{Deserialize, Serialize};
 use crate::CountMinError;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CountMin<H, B, C>
+pub struct CountMin<K, C, S>
 where
-    H: Hash + ?Sized,
-    B: BuildHasher,
+    K: Hash + ?Sized,
     C: Copy + Zero + One + PartialOrd + Bounded,
+    S: BuildHasher,
 {
     width:   usize,
     counts:  Vec<C>,
     hashers: Vec<(u64, u64)>,
-    builder: B,
-    phantom: PhantomData<H>,
+    builder: S,
+    phantom: PhantomData<K>,
 }
 
-pub trait CountMinChecked<H, B, C>
+impl<K, C, S> CountMin<K, C, S>
 where
-    H: Hash + ?Sized,
-    B: BuildHasher,
-    C: Copy + Zero + One + PartialOrd + CheckedAdd + CheckedMul + Bounded,
-{
-    fn update_checked(
-        &mut self,
-        item: &H,
-        diff: C,
-    ) -> Result<(), CountMinError>;
-
-    fn merge_checked(
-        &mut self,
-        other: &CountMin<H, B, C>,
-    ) -> Result<(), CountMinError>;
-
-    fn inner_checked(
-        &self,
-        other: &CountMin<H, B, C>,
-    ) -> Result<C, CountMinError>;
-}
-
-impl<H, B, C> CountMin<H, B, C>
-where
-    H: Hash + ?Sized,
-    B: BuildHasher,
+    K: Hash + ?Sized,
     C: Copy + Zero + One + PartialOrd + Bounded,
+    S: BuildHasher,
 {
     // A large 32-bit prime stored in a u64.
     const MOD: u64 = 2147483647;
@@ -59,7 +36,7 @@ where
     pub fn new(
         epsilon: f64,
         delta: f64,
-        builder: B,
+        builder: S,
     ) -> Result<Self, CountMinError> {
         Self::with_dimensions(
             (f64::consts::E / epsilon).ceil() as usize,
@@ -72,7 +49,7 @@ where
         epsilon: f64,
         delta: f64,
         seed: u64,
-        builder: B,
+        builder: S,
     ) -> Result<Self, CountMinError> {
         Self::with_dimensions_from_seed(
             (f64::consts::E / epsilon).ceil() as usize,
@@ -85,7 +62,7 @@ where
     pub fn with_dimensions(
         width: usize,
         depth: usize,
-        builder: B,
+        builder: S,
     ) -> Result<Self, CountMinError> {
         if width as u64 > Self::MOD || width < 1 || depth < 1 {
             return Err(CountMinError::InvalidDimensions);
@@ -104,7 +81,7 @@ where
         width: usize,
         depth: usize,
         seed: u64,
-        builder: B,
+        builder: S,
     ) -> Result<Self, CountMinError> {
         if width as u64 > Self::MOD || width < 1 || depth < 1 {
             return Err(CountMinError::InvalidDimensions);
@@ -119,7 +96,7 @@ where
         })
     }
 
-    pub fn update(&mut self, item: &H, diff: C) {
+    pub fn update(&mut self, item: &K, diff: C) {
         let mut hasher = self.builder.build_hasher();
 
         item.hash(&mut hasher);
@@ -133,7 +110,7 @@ where
         }
     }
 
-    pub fn query(&self, item: &H) -> C {
+    pub fn query(&self, item: &K) -> C {
         let mut hasher = self.builder.build_hasher();
 
         item.hash(&mut hasher);
@@ -158,18 +135,8 @@ where
 
     pub fn merge(
         &mut self,
-        other: &CountMin<H, B, C>,
+        other: &CountMin<K, C, S>,
     ) -> Result<(), CountMinError> {
-        // XXX: What about the case when a `self.builder` has state ...
-
-        if self.width != other.width || self.counts.len() != other.counts.len()
-        {
-            return Err(CountMinError::IncompatibleDimensions);
-        }
-        if self.hashers != other.hashers {
-            return Err(CountMinError::IncompatibleHashers);
-        }
-
         self.counts
             .iter_mut()
             .zip(other.counts.iter())
@@ -182,17 +149,7 @@ where
         self.counts.iter_mut().for_each(|x| *x = C::zero());
     }
 
-    pub fn inner(&self, other: &CountMin<H, B, C>) -> Result<C, CountMinError> {
-        // XXX: What about the case when a `self.builder` has state ...
-
-        if self.width != other.width || self.counts.len() != other.counts.len()
-        {
-            return Err(CountMinError::IncompatibleDimensions);
-        }
-        if self.hashers != other.hashers {
-            return Err(CountMinError::IncompatibleHashers);
-        }
-
+    pub fn inner(&self, other: &CountMin<K, C, S>) -> Result<C, CountMinError> {
         let (mut inner, mut cur) = (C::max_value(), C::zero());
 
         let counts = self.counts.iter().zip(other.counts.iter()).enumerate();
@@ -234,15 +191,15 @@ where
     }
 }
 
-impl<H, B, C> CountMinChecked<H, B, C> for CountMin<H, B, C>
+impl<K, C, S> CountMin<K, C, S>
 where
-    H: Hash + ?Sized,
-    B: BuildHasher,
+    K: Hash + ?Sized,
     C: Copy + Zero + One + PartialOrd + CheckedAdd + CheckedMul + Bounded,
+    S: BuildHasher,
 {
-    fn update_checked(
+    pub fn update_checked(
         &mut self,
-        item: &H,
+        item: &K,
         diff: C,
     ) -> Result<(), CountMinError> {
         let mut hasher = self.builder.build_hasher();
@@ -262,15 +219,10 @@ where
         Ok(())
     }
 
-    fn merge_checked(
+    pub fn merge_checked(
         &mut self,
-        other: &CountMin<H, B, C>,
+        other: &CountMin<K, C, S>,
     ) -> Result<(), CountMinError> {
-        if self.width != other.width || self.counts.len() != other.counts.len()
-        {
-            return Err(CountMinError::IncompatibleDimensions);
-        }
-
         let counts = self.counts.iter_mut().zip(other.counts.iter());
 
         for (x, y) in counts {
@@ -280,20 +232,10 @@ where
         Ok(())
     }
 
-    fn inner_checked(
+    pub fn inner_checked(
         &self,
-        other: &CountMin<H, B, C>,
+        other: &CountMin<K, C, S>,
     ) -> Result<C, CountMinError> {
-        // XXX: What about the case when a `self.builder` has state ...
-
-        if self.width != other.width || self.counts.len() != other.counts.len()
-        {
-            return Err(CountMinError::IncompatibleDimensions);
-        }
-        if self.hashers != other.hashers {
-            return Err(CountMinError::IncompatibleHashers);
-        }
-
         let (mut inner, mut cur) = (C::max_value(), C::zero());
 
         let counts = self.counts.iter().zip(other.counts.iter()).enumerate();
@@ -317,13 +259,38 @@ where
     }
 }
 
+impl<K, C, S> CountMin<K, C, S>
+where
+    K: Hash + ?Sized,
+    C: Copy + Zero + One + PartialOrd + Bounded,
+    S: BuildHasher + Eq,
+{
+    pub fn check_compatible_with(
+        &self,
+        other: &CountMin<K, C, S>,
+    ) -> Result<(), CountMinError> {
+        if self.width != other.width || self.counts.len() != other.counts.len()
+        {
+            return Err(CountMinError::IncompatibleDimensions);
+        }
+        if self.hashers != other.hashers {
+            return Err(CountMinError::IncompatibleHashers);
+        }
+        if self.builder != other.builder {
+            return Err(CountMinError::IncompatibleBuilders);
+        }
+
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     use std::hash::{BuildHasher, Hasher};
 
-    #[derive(Debug)]
+    #[derive(Debug, PartialEq)]
     struct PassThroughHasher(u64);
 
     impl Hasher for PassThroughHasher {
@@ -341,7 +308,7 @@ mod tests {
         }
     }
 
-    #[derive(Debug)]
+    #[derive(Debug, PartialEq, Eq)]
     struct PassThroughHasherBuilder;
 
     impl BuildHasher for PassThroughHasherBuilder {
@@ -352,9 +319,20 @@ mod tests {
         }
     }
 
+    #[derive(Debug, PartialEq, Eq)]
+    struct OtherPassThroughHasherBuilder(u64);
+
+    impl BuildHasher for OtherPassThroughHasherBuilder {
+        type Hasher = PassThroughHasher;
+
+        fn build_hasher(&self) -> Self::Hasher {
+            PassThroughHasher(self.0)
+        }
+    }
+
     #[test]
     fn test_new() {
-        let cms: CountMin<u64, PassThroughHasherBuilder, u32> =
+        let cms: CountMin<u64, u32, PassThroughHasherBuilder> =
             CountMin::new(0.001, 0.01, PassThroughHasherBuilder {}).unwrap();
 
         assert_eq!(cms.width, 2719);
@@ -365,21 +343,21 @@ mod tests {
     #[test]
     fn test_with_dimensions() {
         let cms: Result<
-            CountMin<u64, PassThroughHasherBuilder, u32>,
+            CountMin<u64, u32, PassThroughHasherBuilder>,
             CountMinError,
         > = CountMin::with_dimensions(0, 13, PassThroughHasherBuilder {});
 
         assert_eq!(cms.err(), Some(CountMinError::InvalidDimensions));
 
         let cms: Result<
-            CountMin<u64, PassThroughHasherBuilder, u32>,
+            CountMin<u64, u32, PassThroughHasherBuilder>,
             CountMinError,
         > = CountMin::with_dimensions(22, 0, PassThroughHasherBuilder {});
 
         assert_eq!(cms.err(), Some(CountMinError::InvalidDimensions));
 
         let cms: Result<
-            CountMin<u64, PassThroughHasherBuilder, u32>,
+            CountMin<u64, u32, PassThroughHasherBuilder>,
             CountMinError,
         > = CountMin::with_dimensions(1 << 33, 12, PassThroughHasherBuilder {});
 
@@ -390,7 +368,7 @@ mod tests {
     fn test_update() {
         let builder = PassThroughHasherBuilder {};
 
-        let mut cms: CountMin<u64, PassThroughHasherBuilder, u32> =
+        let mut cms: CountMin<u64, u32, PassThroughHasherBuilder> =
             CountMin::with_dimensions(10, 3, builder).unwrap();
 
         cms.hashers = vec![(1, 0), (2, 0), (3, 0)];
@@ -421,7 +399,7 @@ mod tests {
 
         let builder = PassThroughHasherBuilder {};
 
-        let mut cms: CountMin<u64, PassThroughHasherBuilder, f32> =
+        let mut cms: CountMin<u64, f32, PassThroughHasherBuilder> =
             CountMin::with_dimensions(10, 3, builder).unwrap();
 
         cms.hashers = vec![(1, 0), (2, 0), (3, 0)];
@@ -443,7 +421,7 @@ mod tests {
     fn test_query() {
         let builder = PassThroughHasherBuilder {};
 
-        let mut cms: CountMin<u64, PassThroughHasherBuilder, u32> =
+        let mut cms: CountMin<u64, u32, PassThroughHasherBuilder> =
             CountMin::with_dimensions(10, 3, builder).unwrap();
 
         cms.hashers = vec![(1, 0), (2, 0), (3, 0)];
@@ -475,7 +453,7 @@ mod tests {
 
         let builder = PassThroughHasherBuilder {};
 
-        let mut cms: CountMin<u64, PassThroughHasherBuilder, f32> =
+        let mut cms: CountMin<u64, f32, PassThroughHasherBuilder> =
             CountMin::with_dimensions(10, 3, builder).unwrap();
 
         cms.hashers = vec![(1, 0), (2, 0), (3, 0)];
@@ -504,7 +482,7 @@ mod tests {
     fn test_is_empty() {
         let builder = PassThroughHasherBuilder {};
 
-        let mut cms: CountMin<u64, PassThroughHasherBuilder, u32> =
+        let mut cms: CountMin<u64, u32, PassThroughHasherBuilder> =
             CountMin::with_dimensions(10, 3, builder).unwrap();
 
         assert!(cms.is_empty());
@@ -518,7 +496,7 @@ mod tests {
     fn test_update_checked() {
         let builder = PassThroughHasherBuilder {};
 
-        let mut cms: CountMin<u64, PassThroughHasherBuilder, u8> =
+        let mut cms: CountMin<u64, u8, PassThroughHasherBuilder> =
             CountMin::with_dimensions(10, 3, builder).unwrap();
 
         cms.hashers = vec![(1, 0), (2, 0), (3, 0)];
@@ -582,7 +560,7 @@ mod tests {
     fn test_merge() {
         let builder = PassThroughHasherBuilder {};
 
-        let mut cms: CountMin<u64, PassThroughHasherBuilder, u32> =
+        let mut cms: CountMin<u64, u32, PassThroughHasherBuilder> =
             CountMin::with_dimensions(10, 3, builder).unwrap();
 
         cms.hashers = vec![(1, 0), (2, 0), (3, 0)];
@@ -605,7 +583,7 @@ mod tests {
 
         let builder = PassThroughHasherBuilder {};
 
-        let mut other: CountMin<u64, PassThroughHasherBuilder, u32> =
+        let mut other: CountMin<u64, u32, PassThroughHasherBuilder> =
             CountMin::with_dimensions(10, 3, builder).unwrap();
 
         other.hashers = vec![(1, 0), (2, 0), (3, 0)];
@@ -631,27 +609,13 @@ mod tests {
         ];
 
         assert_eq!(cms.counts, expected);
-
-        other.hashers = vec![(1, 1), (2, 1), (3, 1)];
-
-        assert_eq!(cms.merge(&other), Err(CountMinError::IncompatibleHashers));
-
-        let builder = PassThroughHasherBuilder {};
-
-        let other: CountMin<u64, PassThroughHasherBuilder, u32> =
-            CountMin::with_dimensions(10, 4, builder).unwrap();
-
-        assert_eq!(
-            cms.merge(&other),
-            Err(CountMinError::IncompatibleDimensions)
-        );
     }
 
     #[test]
     fn test_merge_checked() {
         let builder = PassThroughHasherBuilder {};
 
-        let mut cms: CountMin<u64, PassThroughHasherBuilder, u8> =
+        let mut cms: CountMin<u64, u8, PassThroughHasherBuilder> =
             CountMin::with_dimensions(10, 3, builder).unwrap();
 
         cms.hashers = vec![(1, 0), (2, 0), (3, 0)];
@@ -674,7 +638,7 @@ mod tests {
 
         let builder = PassThroughHasherBuilder {};
 
-        let mut other: CountMin<u64, PassThroughHasherBuilder, u8> =
+        let mut other: CountMin<u64, u8, PassThroughHasherBuilder> =
             CountMin::with_dimensions(10, 3, builder).unwrap();
 
         other.hashers = vec![(1, 0), (2, 0), (3, 0)];
@@ -709,7 +673,7 @@ mod tests {
     fn test_clear() {
         let builder = PassThroughHasherBuilder {};
 
-        let mut cms: CountMin<u64, PassThroughHasherBuilder, u32> =
+        let mut cms: CountMin<u64, u32, PassThroughHasherBuilder> =
             CountMin::with_dimensions(10, 3, builder).unwrap();
 
         cms.hashers = vec![(1, 0), (2, 0), (3, 0)];
@@ -739,7 +703,7 @@ mod tests {
     fn test_inner() {
         let builder = PassThroughHasherBuilder {};
 
-        let mut cms: CountMin<u64, PassThroughHasherBuilder, u32> =
+        let mut cms: CountMin<u64, u32, PassThroughHasherBuilder> =
             CountMin::with_dimensions(10, 3, builder).unwrap();
 
         cms.hashers = vec![(1, 0), (2, 0), (3, 0)];
@@ -762,7 +726,7 @@ mod tests {
 
         let builder = PassThroughHasherBuilder {};
 
-        let mut other: CountMin<u64, PassThroughHasherBuilder, u32> =
+        let mut other: CountMin<u64, u32, PassThroughHasherBuilder> =
             CountMin::with_dimensions(10, 3, builder).unwrap();
 
         other.hashers = vec![(1, 0), (2, 0), (3, 0)];
@@ -784,27 +748,13 @@ mod tests {
         other.counts[2] = 4;
 
         assert_eq!(cms.inner(&other), Ok(21));
-
-        other.hashers = vec![(1, 1), (2, 1), (3, 1)];
-
-        assert_eq!(cms.inner(&other), Err(CountMinError::IncompatibleHashers));
-
-        let builder = PassThroughHasherBuilder {};
-
-        let other: CountMin<u64, PassThroughHasherBuilder, u32> =
-            CountMin::with_dimensions(10, 4, builder).unwrap();
-
-        assert_eq!(
-            cms.inner(&other),
-            Err(CountMinError::IncompatibleDimensions)
-        );
     }
 
     #[test]
     fn test_inner_checked() {
         let builder = PassThroughHasherBuilder {};
 
-        let mut cms: CountMin<u64, PassThroughHasherBuilder, u8> =
+        let mut cms: CountMin<u64, u8, PassThroughHasherBuilder> =
             CountMin::with_dimensions(10, 3, builder).unwrap();
 
         cms.hashers = vec![(1, 0), (2, 0), (3, 0)];
@@ -827,7 +777,7 @@ mod tests {
 
         let builder = PassThroughHasherBuilder {};
 
-        let mut other: CountMin<u64, PassThroughHasherBuilder, u8> =
+        let mut other: CountMin<u64, u8, PassThroughHasherBuilder> =
             CountMin::with_dimensions(10, 3, builder).unwrap();
 
         other.hashers = vec![(1, 0), (2, 0), (3, 0)];
@@ -858,6 +808,67 @@ mod tests {
         assert_eq!(
             cms.inner_checked(&other),
             Err(CountMinError::CounterOverflow)
+        );
+    }
+
+    #[test]
+    fn test_check_compatible_with() {
+        let builder = PassThroughHasherBuilder {};
+
+        let mut cms: CountMin<u64, u32, PassThroughHasherBuilder> =
+            CountMin::with_dimensions(10, 3, builder).unwrap();
+
+        cms.hashers = vec![(1, 0), (2, 0), (3, 0)];
+
+        let builder = PassThroughHasherBuilder {};
+
+        let mut other: CountMin<u64, u32, PassThroughHasherBuilder> =
+            CountMin::with_dimensions(10, 3, builder).unwrap();
+
+        other.hashers = vec![(1, 0), (2, 0), (3, 0)];
+
+        assert!(cms.check_compatible_with(&other).is_ok());
+
+        other.hashers = vec![(1, 1), (2, 2), (3, 3)];
+
+        assert_eq!(
+            cms.check_compatible_with(&other),
+            Err(CountMinError::IncompatibleHashers)
+        );
+
+        let builder = OtherPassThroughHasherBuilder(0);
+
+        let mut cms: CountMin<u64, u32, OtherPassThroughHasherBuilder> =
+            CountMin::with_dimensions(10, 3, builder).unwrap();
+
+        cms.hashers = vec![(1, 0), (2, 0), (3, 0)];
+
+        let builder = OtherPassThroughHasherBuilder(0);
+
+        let mut other: CountMin<u64, u32, OtherPassThroughHasherBuilder> =
+            CountMin::with_dimensions(10, 3, builder).unwrap();
+
+        other.hashers = vec![(1, 0), (2, 0), (3, 0)];
+
+        assert!(cms.check_compatible_with(&other).is_ok());
+
+        other.builder = OtherPassThroughHasherBuilder(3);
+
+        assert_eq!(
+            cms.check_compatible_with(&other),
+            Err(CountMinError::IncompatibleBuilders)
+        );
+
+        let builder = OtherPassThroughHasherBuilder(0);
+
+        let mut other: CountMin<u64, u32, OtherPassThroughHasherBuilder> =
+            CountMin::with_dimensions(11, 3, builder).unwrap();
+
+        other.hashers = vec![(1, 0), (2, 0), (3, 0)];
+
+        assert_eq!(
+            cms.check_compatible_with(&other),
+            Err(CountMinError::IncompatibleDimensions)
         );
     }
 }

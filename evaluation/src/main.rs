@@ -28,9 +28,9 @@ struct Configuration {
     output: String,
 }
 
-fn load<T>(filepath: &String) -> Vec<T>
+fn load<K>(filepath: &String) -> Vec<K>
 where
-    T: str::FromStr + fmt::Debug,
+    K: str::FromStr + fmt::Debug,
 {
     let file = File::open(filepath).unwrap();
 
@@ -41,7 +41,7 @@ where
     for line in reader.lines() {
         nums.push(
             line.unwrap()
-                .parse::<T>()
+                .parse::<K>()
                 .map_err(|_| "Parsing line failed")
                 .expect("Failed to parse line."),
         );
@@ -50,9 +50,9 @@ where
     nums
 }
 
-fn run<T>(conf: Configuration, args: Vec<String>, pos: usize)
+fn run<K>(conf: Configuration, args: Vec<String>, pos: usize)
 where
-    T: str::FromStr + fmt::Debug + Hash + Eq + Ord,
+    K: str::FromStr + fmt::Debug + Hash + Eq + Ord,
 {
     let conf = Arc::new(conf);
     let args = Arc::new(args);
@@ -88,17 +88,16 @@ where
                         );
                     }
 
-                    let hashes: Vec<T> = load(&args[i]);
+                    let hashes: Vec<K> = load(&args[i]);
 
-                    let mut cms: CountMin<T, RandomState, u32> =
-                        CountMin::with_dimensions(
-                            conf.width,
-                            conf.depth,
-                            RandomState::new(),
-                        )
-                        .unwrap();
+                    let mut cms = CountMin::with_dimensions(
+                        conf.width,
+                        conf.depth,
+                        RandomState::new(),
+                    )
+                    .unwrap();
 
-                    let mut counts: HashMap<&T, u32> = HashMap::new();
+                    let mut counts: HashMap<&K, u32> = HashMap::new();
 
                     let (mut minres, mut maxres, mut avgres) =
                         (vec![], vec![], vec![]);
@@ -106,7 +105,7 @@ where
                     let samples = cmp::max(1, hashes.len() / 1000);
 
                     for (j, num) in hashes.iter().enumerate() {
-                        cms.update(num, 1);
+                        cms.update(num, 1u32);
 
                         let entry = counts.entry(num).or_insert(0);
 
@@ -176,13 +175,13 @@ where
     writer.flush().unwrap();
 }
 
-fn heavy_hitters_relative_errors<T>(
-    cms: &CountMin<T, RandomState, u32>,
-    counts: &HashMap<&T, u32>,
+fn heavy_hitters_relative_errors<K>(
+    cms: &CountMin<K, u32, RandomState>,
+    counts: &HashMap<&K, u32>,
     thres: u32,
 ) -> (u32, f64, f64, f64)
 where
-    T: str::FromStr + fmt::Debug + Hash + Eq + Ord,
+    K: str::FromStr + fmt::Debug + Hash + Eq + Ord,
 {
     let (mut minre, mut maxre, mut sumre, mut norm) =
         (f64::MAX, f64::MIN, 0.0f64, 0);

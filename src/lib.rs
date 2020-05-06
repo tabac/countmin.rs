@@ -9,6 +9,7 @@ pub enum CountMinError {
     CounterOverflow,
     InvalidDimensions,
     IncompatibleHashers,
+    IncompatibleBuilders,
     IncompatibleDimensions,
 }
 
@@ -18,6 +19,9 @@ impl fmt::Display for CountMinError {
             CountMinError::CounterOverflow => "counter overflowed.".fmt(f),
             CountMinError::InvalidDimensions => "invalid dimensions.".fmt(f),
             CountMinError::IncompatibleHashers => "incomatible hashers.".fmt(f),
+            CountMinError::IncompatibleBuilders => {
+                "incomatible builders.".fmt(f)
+            },
             CountMinError::IncompatibleDimensions => {
                 "incompatible dimensions.".fmt(f)
             },

@@ -22,7 +22,7 @@ fn bench_update(c: &mut Criterion) {
 
     macro_rules! bench_impls {
         ($benchname:expr, $width:expr, $depth:expr) => {
-            let mut cms: CountMin<String, RandomState, u32> =
+            let mut cms: CountMin<String, u32, RandomState> =
                 CountMin::with_dimensions($width, $depth, RandomState::new())
                     .unwrap();
 
@@ -46,7 +46,7 @@ fn bench_query(c: &mut Criterion) {
 
     macro_rules! bench_impls {
         ($benchname:expr, $width:expr, $depth:expr) => {
-            let mut cms: CountMin<String, RandomState, u32> =
+            let mut cms: CountMin<String, u32, RandomState> =
                 CountMin::with_dimensions($width, $depth, RandomState::new())
                     .unwrap();
 
